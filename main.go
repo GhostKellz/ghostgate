@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -12,7 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gorilla/handlers"
 	"gopkg.in/yaml.v2"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 type Config struct {
@@ -85,6 +86,9 @@ func main() {
 
 	// Use configuration values
 	port := config.Server.Port
+	if port == 0 {
+		port = 80 // Default to port 80 for HTTP
+	}
 	staticDir := config.Server.StaticDir
 
 	// Validate directory
@@ -106,13 +110,47 @@ func main() {
 		log.Printf("Proxying path %s to backend: %s", route.Path, route.Backend)
 	}
 
-	http.Handle("/", http.FileServer(http.Dir(staticDir)))
+	// Add gzip compression and caching for static files
+	fileServer := http.FileServer(http.Dir(staticDir))
+	gzipHandler := handlers.CompressHandler(fileServer)
+	cacheHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=31536000")
+		gzipHandler.ServeHTTP(w, r)
+	})
+	http.Handle("/", cacheHandler)
 	log.Printf("Serving static files from: %s", staticDir)
 
-	addr := fmt.Sprintf(":%d", port)
-	log.Printf("GhostGate running on http://localhost%s\n", addr)
-	err = http.ListenAndServe(addr, nil)
-	if err != nil {
-		log.Fatalf("Server failed: %v", err)
+	// Set up autocert manager for Let's Encrypt
+	autoCertManager := &autocert.Manager{
+		Cache:      autocert.DirCache("certs"), // Directory to store certificates
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist("example.com", "www.example.com"), // Replace with your domain(s)
+	}
+
+	// Start HTTPS server with autocert
+	httpsServer := &http.Server{
+		Addr:      ":443",
+		Handler:   nil,
+		TLSConfig: autoCertManager.TLSConfig(),
+	}
+
+	// Start HTTP server to redirect to HTTPS
+	httpServer := &http.Server{
+		Addr: ":80",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "https://"+r.Host+r.URL.String(), http.StatusMovedPermanently)
+		}),
+	}
+
+	go func() {
+		log.Printf("Starting HTTP server on :80")
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server failed: %v", err)
+		}
+	}()
+
+	log.Printf("Starting HTTPS server on :443")
+	if err := httpsServer.ListenAndServeTLS("", ""); err != nil {
+		log.Fatalf("HTTPS server failed: %v", err)
 	}
 }
