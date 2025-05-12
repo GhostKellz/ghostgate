@@ -1,6 +1,5 @@
 # GhostGate
 
-[![Build Status](https://github.com/ghostkellz/ghostgate/actions/workflows/go.yml/badge.svg)](https://github.com/ghostkellz/ghostgate/actions)
 [![Go Reference](https://pkg.go.dev/badge/github.com/ghostkellz/ghostgate.svg)](https://pkg.go.dev/github.com/ghostkellz/ghostgate)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ghostkellz/ghostgate)](https://goreportcard.com/report/github.com/ghostkellz/ghostgate)
 [![Issues](https://img.shields.io/github/issues/ghostkellz/ghostgate)](https://github.com/ghostkellz/ghostgate/issues)
