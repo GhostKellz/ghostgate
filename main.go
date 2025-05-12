@@ -9,19 +9,25 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"compress/gzip"
+	"github.com/patrickmn/go-cache"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v2"
 )
+
+const version = "1.0.0" // Define the version of GhostGate
 
 type Config struct {
 	Server struct {
@@ -81,7 +87,8 @@ func loadConfigs(mainConfigPath string, confDir string) (*Config, error) {
 	return mainConfig, nil
 }
 
-func serveStaticFiles(staticDir string) http.Handler {
+// Add caching headers for static files
+func serveStaticFilesWithCache(staticDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		filePath := filepath.Join(staticDir, r.URL.Path)
 		info, err := os.Stat(filePath)
@@ -109,13 +116,22 @@ func serveStaticFiles(staticDir string) http.Handler {
 			w.Write([]byte("</ul></body></html>"))
 			return
 		}
-		// Serve file with MIME type detection
+		// Serve file with caching headers
 		mimeType := mime.TypeByExtension(filepath.Ext(filePath))
 		if mimeType == "" {
 			mimeType = "application/octet-stream"
 		}
 		w.Header().Set("Content-Type", mimeType)
+		w.Header().Set("Cache-Control", "public, max-age=3600")
 		http.ServeFile(w, r, filePath)
+	})
+}
+
+// Add health check endpoint
+func serveHealthCheck() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
 	})
 }
 
@@ -181,19 +197,142 @@ func (j *jsonLogWriter) Write(p []byte) (n int, err error) {
 
 func validateConfig(configPath string) error {
 	log.Printf("Validating configuration file: %s", configPath)
-	_, err := loadConfig(configPath)
+	config, err := loadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("validation failed: %v", err)
 	}
+
+	// Check for required fields
+	if config.Server.Port == 0 {
+		return fmt.Errorf("server port is not defined")
+	}
+	if config.Server.StaticDir == "" && len(config.Proxy.Routes) == 0 {
+		return fmt.Errorf("either static_dir or proxy routes must be defined")
+	}
+
 	log.Println("Configuration is valid.")
 	return nil
 }
 
+func reloadGhostGate() {
+	pid := os.Getpid()
+	log.Printf("Sending SIGHUP signal to process %d to reload configurations...", pid)
+	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
+		log.Fatalf("Failed to send SIGHUP signal: %v", err)
+	}
+	log.Println("Reload signal sent successfully.")
+}
+
+func issueCertificate(domain string) {
+	log.Printf("Issuing certificate for domain: %s", domain)
+
+	// Define the command to issue the certificate using acme.sh
+	cmd := exec.Command("acme.sh", "--issue", "--dns", "dns_pdns", "-d", domain, "-d", "*."+domain, "--dnssleep", "20", "--log", "--debug")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Run the command
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("Failed to issue certificate for domain %s: %v", domain, err)
+	}
+
+	// Define the directory to store the certificates
+	domainDir := filepath.Join("/etc/ghostgate/certs", domain)
+	if err := os.MkdirAll(domainDir, 0755); err != nil {
+		log.Fatalf("Failed to create directory for certificates: %v", err)
+	}
+
+	// Install the certificates
+	installCmd := exec.Command("acme.sh", "--install-cert", "-d", domain,
+		"--cert-file", filepath.Join(domainDir, "cert.pem"),
+		"--key-file", filepath.Join(domainDir, "privkey.pem"),
+		"--fullchain-file", filepath.Join(domainDir, "fullchain.pem"),
+		"--reloadcmd", "ghostgate reload")
+	installCmd.Stdout = os.Stdout
+	installCmd.Stderr = os.Stderr
+
+	if err := installCmd.Run(); err != nil {
+		log.Fatalf("Failed to install certificate for domain %s: %v", domain, err)
+	}
+
+	log.Printf("Certificate successfully issued and installed for domain: %s", domain)
+}
+
+// Add a global cache instance
+var responseCache = cache.New(5*time.Minute, 10*time.Minute)
+
+// Middleware to handle reverse proxy response caching
+func cacheMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cacheKey := r.URL.String()
+		if cachedResponse, found := responseCache.Get(cacheKey); found {
+			w.Write(cachedResponse.([]byte))
+			return
+		}
+
+		recorder := httptest.NewRecorder()
+		next.ServeHTTP(recorder, r)
+
+		for k, v := range recorder.Header() {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(recorder.Code)
+		responseBody := recorder.Body.Bytes()
+		w.Write(responseBody)
+
+		responseCache.Set(cacheKey, responseBody, cache.DefaultExpiration)
+	})
+}
+
+// Middleware to add gzip compression
+func gzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		gzipWriter := &gzipResponseWriter{Writer: gz, ResponseWriter: w}
+		next.ServeHTTP(gzipWriter, r)
+	})
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	io.Writer
+}
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	return w.Writer.Write(b)
+}
+
 func main() {
-	mode := flag.String("mode", "run", "Mode of operation: run or check")
+	mode := flag.String("mode", "run", "Mode of operation: run, check, reload, cert, or version")
 	configPath := flag.String("config", "ghostgate.conf", "Path to main configuration file")
 	confDir := flag.String("conf-dir", "conf.d", "Path to additional configuration directory")
+	domain := flag.String("domain", "", "Domain for certificate issuance (used with cert mode)")
 	flag.Parse()
+
+	if *mode == "version" {
+		fmt.Printf("GhostGate version %s\n", version)
+		os.Exit(0)
+	}
+
+	if *mode == "reload" {
+		reloadGhostGate()
+		os.Exit(0)
+	}
+
+	if *mode == "cert" {
+		if *domain == "" {
+			log.Fatalf("Domain is required for certificate issuance. Use -domain flag.")
+		}
+		issueCertificate(*domain)
+		os.Exit(0)
+	}
 
 	if *mode == "check" {
 		if err := validateConfig(*configPath); err != nil {
@@ -264,7 +403,8 @@ func main() {
 		log.Println("Serving default Welcome to GhostGate page")
 	} else {
 		// Replace static file handler with enhanced version
-		http.Handle("/", serveStaticFiles(config.Server.StaticDir))
+		http.Handle("/health", serveHealthCheck())
+		http.Handle("/", gzipMiddleware(cacheMiddleware(serveStaticFilesWithCache(config.Server.StaticDir))))
 	}
 
 	// Set up autocert manager for Let's Encrypt

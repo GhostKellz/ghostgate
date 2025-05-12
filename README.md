@@ -45,6 +45,8 @@ go build -o ghostgate
 ```
 
 ---
+
+---
 ### 🧩 What's Inside
 
 GhostGate now includes everything you need for modern HTTP service and reverse proxying:
@@ -69,6 +71,116 @@ GhostGate isn't just fast — it's production-ready:
 - Reverse proxy engine with header rewrites and rate limiting
 - Clean structured logging (JSON/plain) and gzip support
 - systemd integration with ready-to-deploy unit file
+---
+## 🧹 Commands
+
+GhostGate includes the following CLI commands:
+
+### `ghostgate serve`
+
+Starts the GhostGate HTTP server with the specified configuration.
+
+```bash
+ghostgate serve -config /etc/ghostgate/config.yaml
+```
+
+---
+
+### `ghostgate check`
+
+Validates your configuration file without starting the server. Useful for CI/CD pipelines and manual debugging.
+
+```bash
+ghostgate check -config /etc/ghostgate/config.yaml
+```
+
+If the configuration is valid, you'll see:
+
+```
+✔ Configuration is valid.
+```
+
+If errors are found, they will be printed with details.
+
+---
+
+### `ghostgate reload`
+
+Sends a `SIGHUP` signal to gracefully reload GhostGate configurations without restarting the server.
+
+```bash
+ghostgate reload
+```
+
+---
+
+### `ghostgate --version`
+
+Displays the current version of GhostGate.
+
+```bash
+ghostgate --version
+```
+
+---
+
+### `ghostgate status`
+
+Displays the current systemd service status for GhostGate.
+
+```bash
+ghostgate status
+```
+
+---
+
+### `ghostgate cert -domain <example.com>`
+
+Issues TLS certificates via ACME for a specified domain and its wildcard.
+
+```bash
+ghostgate cert -domain example.com
+```
+
+This will:
+
+1. Use `acme.sh` to request a certificate for the domain and its wildcard (e.g. `*.example.com`).
+2. Store the resulting certificates in `/etc/ghostgate/certs/<domain>`.
+3. Reload GhostGate to begin using the new certificate.
+
+This command supports automation and can be integrated into a cron job or deployment pipeline.
+
+---
+
+## 🔐 TLS & Encryption
+
+GhostGate supports full TLS configuration with:
+
+* ACME certificate issuance using `ghostgate cert`
+* Certificate reload via `ghostgate reload`
+* Custom cert/key paths via configuration
+* Planned support for OCSP stapling and auto-renew cron
+
+Future improvements:
+
+* HTTP/2 + modern TLS cipher suites
+* Let's Encrypt wildcard + SAN support
+* Reload-free cert hot-swap
+
+---
+
+## ✨ Performance Enhancements (Planned)
+
+* **Reverse Proxy Caching:** Optional response caching via Ristretto or groupcache
+* **HTTP/2 + TLS Optimization:** Enable HTTP/2 and disable insecure ciphers
+* **Connection Pooling:** Reduce overhead for repeated requests
+* **Static Compression:** Add Brotli/gzip compression to static file responses
+* **Rate Limiting:** Support per-IP limiting in config
+* **Health Endpoint:** Add `/health` route for probes and monitoring
+* **Log Rotation:** Support for rotating large logs automatically
+
+Let us know which features you'd like prioritized!
+
 ---
 ### 🌱 Next Steps (Community Wishlist)
 
