@@ -4,16 +4,19 @@ import (
 	"flag"
 	"io/ioutil"
 	"log"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
-	"github.com/gorilla/handlers"
 	"gopkg.in/yaml.v2"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/time/rate"
 )
 
 type Config struct {
@@ -74,15 +77,88 @@ func loadConfigs(mainConfigPath string, confDir string) (*Config, error) {
 	return mainConfig, nil
 }
 
+func serveStaticFiles(staticDir string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		filePath := filepath.Join(staticDir, r.URL.Path)
+		info, err := os.Stat(filePath)
+		if os.IsNotExist(err) {
+			http.Error(w, "404 - Not Found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "403 - Forbidden", http.StatusForbidden)
+			return
+		}
+		if info.IsDir() {
+			// Serve directory index
+			files, err := os.ReadDir(filePath)
+			if err != nil {
+				http.Error(w, "403 - Forbidden", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("<html><body><ul>"))
+			for _, file := range files {
+				w.Write([]byte("<li><a href=\"" + file.Name() + "\">" + file.Name() + "</a></li>"))
+			}
+			w.Write([]byte("</ul></body></html>"))
+			return
+		}
+		// Serve file with MIME type detection
+		mimeType := mime.TypeByExtension(filepath.Ext(filePath))
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", mimeType)
+		http.ServeFile(w, r, filePath)
+	})
+}
+
+func rateLimitedProxy(proxy *httputil.ReverseProxy, limiter *rate.Limiter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !limiter.Allow() {
+			http.Error(w, "429 - Too Many Requests", http.StatusTooManyRequests)
+			return
+		}
+		// Inject custom headers
+		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
+		proxy.ServeHTTP(w, r)
+	}
+}
+
 func main() {
 	configPath := flag.String("config", "gate.conf", "Path to main configuration file")
 	confDir := flag.String("conf-dir", "conf.d", "Path to additional configuration directory")
 	flag.Parse()
 
+	reloadChan := make(chan os.Signal, 1)
+	signal.Notify(reloadChan, syscall.SIGHUP)
+
 	config, err := loadConfigs(*configPath, *confDir)
 	if err != nil {
 		log.Fatalf("Failed to load configurations: %v", err)
 	}
+
+	// Function to reload configurations
+	reloadConfig := func() {
+		log.Println("Reloading configurations...")
+		newConfig, err := loadConfigs(*configPath, *confDir)
+		if err != nil {
+			log.Printf("Failed to reload configurations: %v", err)
+			return
+		}
+		config = newConfig
+		log.Println("Configurations reloaded successfully.")
+	}
+
+	// Start a goroutine to listen for reload signals
+	go func() {
+		for {
+			<-reloadChan
+			reloadConfig()
+		}
+	}()
 
 	// Use configuration values
 	port := config.Server.Port
@@ -104,21 +180,13 @@ func main() {
 			continue
 		}
 		proxy := httputil.NewSingleHostReverseProxy(backendURL)
-		http.HandleFunc(route.Path, func(w http.ResponseWriter, r *http.Request) {
-			proxy.ServeHTTP(w, r)
-		})
+		limiter := rate.NewLimiter(1, 5) // 1 request per second with a burst of 5
+		http.HandleFunc(route.Path, rateLimitedProxy(proxy, limiter))
 		log.Printf("Proxying path %s to backend: %s", route.Path, route.Backend)
 	}
 
-	// Add gzip compression and caching for static files
-	fileServer := http.FileServer(http.Dir(staticDir))
-	gzipHandler := handlers.CompressHandler(fileServer)
-	cacheHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=31536000")
-		gzipHandler.ServeHTTP(w, r)
-	})
-	http.Handle("/", cacheHandler)
-	log.Printf("Serving static files from: %s", staticDir)
+	// Replace static file handler with enhanced version
+	http.Handle("/", serveStaticFiles(config.Server.StaticDir))
 
 	// Set up autocert manager for Let's Encrypt
 	autoCertManager := &autocert.Manager{
