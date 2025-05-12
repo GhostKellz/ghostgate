@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -133,7 +134,7 @@ func serveWelcomePage() http.Handler {
 			</html>
 		`))
 	})
-}
+} 
 
 func rateLimitedProxy(proxy *httputil.ReverseProxy, limiter *rate.Limiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -178,10 +179,28 @@ func (j *jsonLogWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
+func validateConfig(configPath string) error {
+	log.Printf("Validating configuration file: %s", configPath)
+	_, err := loadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("validation failed: %v", err)
+	}
+	log.Println("Configuration is valid.")
+	return nil
+}
+
 func main() {
+	mode := flag.String("mode", "run", "Mode of operation: run or check")
 	configPath := flag.String("config", "ghostgate.conf", "Path to main configuration file")
 	confDir := flag.String("conf-dir", "conf.d", "Path to additional configuration directory")
 	flag.Parse()
+
+	if *mode == "check" {
+		if err := validateConfig(*configPath); err != nil {
+			log.Fatalf("Configuration validation failed: %v", err)
+		}
+		os.Exit(0)
+	}
 
 	reloadChan := make(chan os.Signal, 1)
 	signal.Notify(reloadChan, syscall.SIGHUP)
