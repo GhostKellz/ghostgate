@@ -1,3 +1,11 @@
+# GhostGate
+
+[![Build Status](https://github.com/ghostkellz/ghostgate/actions/workflows/go.yml/badge.svg)](https://github.com/ghostkellz/ghostgate/actions)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ghostkellz/ghostgate.svg)](https://pkg.go.dev/github.com/ghostkellz/ghostgate)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ghostkellz/ghostgate)](https://goreportcard.com/report/github.com/ghostkellz/ghostgate)
+[![Issues](https://img.shields.io/github/issues/ghostkellz/ghostgate)](https://github.com/ghostkellz/ghostgate/issues)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPLv3-blue.svg)](LICENSE)
+
 ---
 
 ### 💡 What is GhostGate?
@@ -38,25 +46,34 @@ go build -o ghostgate
 
 #### Core Functionality
 
-* TBD
+* [ ] YAML/JSON config support
+* [ ] Command-line flags and overrides
+* [ ] Graceful restart and reload
+* [ ] Built-in logging with access/output formats
 
 #### Static Server Features
 
-* TBD
+* [ ] Directory index support
+* [ ] MIME type detection
+* [ ] Custom 404/403 error pages
 
 #### Reverse Proxy Features
 
-* TBD
+* [ ] Path/host-based routing
+* [ ] Header injection and manipulation
+* [ ] Rate limiting and filtering
+* [ ] TLS passthrough and termination
 
-#### Docker Compose
+#### DevOps/Deploy
 
-* TBD
+* [ ] systemd unit file and `.deb`/`.pkg.tar.zst` packaging
+* [ ] Dockerfile and GitHub Container Registry publishing
+* [ ] CI pipeline (GitHub Actions)
 
 ---
 
 ### 📝 License
 
-**GNU Affero General Public License v3.0 (AGPL-3.0)** — See [LICENSE](LICENSE) for full terms.
+**AGPL v3** — See [LICENSE](LICENSE) for details.
 
-GhostGate is free and open software: you can use, study, share, and modify it.  
-However, if you deploy a modified version of GhostGate as part of a public service, you must also publish the source code of your modifications.
+GhostGate is part of the GhostKellz infrastructure tooling ecosystem.
