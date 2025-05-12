@@ -1,32 +1,33 @@
 # GhostGate
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/ghostkellz/ghostgate.svg)](https://pkg.go.dev/github.com/ghostkellz/ghostgate)
-[![Go Report Card](https://goreportcard.com/badge/github.com/ghostkellz/ghostgate)](https://goreportcard.com/report/github.com/ghostkellz/ghostgate)
-[![Issues](https://img.shields.io/github/issues/ghostkellz/ghostgate)](https://github.com/ghostkellz/ghostgate/issues)
-[![License: AGPL v3](https://img.shields.io/badge/license-AGPLv3-blue.svg)](LICENSE)
-
 ---
 
 ### 💡 What is GhostGate?
 
 **GhostGate** is a modern HTTP server and reverse proxy written in Go.
-Designed for flexibility, it aims to power:
 
-* Static file hosting (ideal for Arch repo/AUR mirrors)
-* Secure reverse proxy for web services
-* Eventually: certificate handling, middleware, caching, and beyond
+Designed for flexibility and performance, it powers:
 
-Whether you're serving `.pkg.tar.zst` files or routing traffic to internal services, **GhostGate** is a reliable, lightweight entrypoint.
+* Static file hosting (perfect for AUR mirrors or internal repos)
+* Secure reverse proxying with TLS and fine-grained routing
+* Auto TLS via Let's Encrypt (no certbot needed)
+* Fast startup, hot reloading, and DevOps-ready deployment
 
 ---
 
 ### 🚀 Features
 
-* Serve static files from any directory
-* Configurable port, logging, and bind host
-* Reverse proxy support (planned)
-* Zero dependencies, just Go
-* Fast startup and hot reloads (planned)
+* Serve static files with MIME type detection
+* Directory listings and custom 404/403 error pages
+* Reverse proxy with path-based routing
+* Header injection and request manipulation
+* Rate limiting and filtering (WIP)
+* Built-in TLS via Let's Encrypt using `autocert`
+* YAML-based configuration (supports `gate.conf` + `conf.d/*.yaml`)
+* Systemd unit file for service deployment
+* Gzip compression and static file caching
+* Logging with customizable levels and formats (JSON or plain)
+* Welcome page when no config is present
 
 ---
 
@@ -43,31 +44,21 @@ go build -o ghostgate
 
 ### 📅 Roadmap
 
-#### Core Functionality
+#### ✅ Core Functionality
 
-* [ ] YAML/JSON config support
-* [ ] Command-line flags and overrides
-* [ ] Graceful restart and reload
-* [ ] Built-in logging with access/output formats
+*
 
-#### Static Server Features
+#### ✅ Static Server Features
 
-* [ ] Directory index support
-* [ ] MIME type detection
-* [ ] Custom 404/403 error pages
+*
 
-#### Reverse Proxy Features
+#### ✅ Reverse Proxy Features
 
-* [ ] Path/host-based routing
-* [ ] Header injection and manipulation
-* [ ] Rate limiting and filtering
-* [ ] TLS passthrough and termination
+*
 
-#### DevOps/Deploy
+#### ✅ DevOps/Deploy
 
-* [ ] systemd unit file and `.deb`/`.pkg.tar.zst` packaging
-* [ ] Dockerfile and GitHub Container Registry publishing
-* [ ] CI pipeline (GitHub Actions)
+*
 
 ---
 
@@ -75,4 +66,4 @@ go build -o ghostgate
 
 **AGPL v3** — See [LICENSE](LICENSE) for details.
 
-GhostGate is part of the GhostKellz infrastructure tooling ecosystem.
+GhostGate is part of the \*\*CK Technology \*\*  infrastructure tooling ecosystem.
