@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
+	"io"
 	"io/ioutil"
 	"log"
 	"mime"
@@ -13,10 +15,11 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
-	"gopkg.in/yaml.v2"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/time/rate"
+	"gopkg.in/yaml.v2"
 )
 
 type Config struct {
@@ -115,6 +118,23 @@ func serveStaticFiles(staticDir string) http.Handler {
 	})
 }
 
+func serveWelcomePage() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`
+			<html>
+			<head><title>Welcome to GhostGate</title></head>
+			<body>
+			<h1>Welcome to GhostGate</h1>
+			<p>If you see this page, the GhostGate server is running successfully.</p>
+			<p>Configure your server by editing <code>gate.conf</code> or adding files to <code>conf.d/</code>.</p>
+			</body>
+			</html>
+		`))
+	})
+}
+
 func rateLimitedProxy(proxy *httputil.ReverseProxy, limiter *rate.Limiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !limiter.Allow() {
@@ -127,8 +147,39 @@ func rateLimitedProxy(proxy *httputil.ReverseProxy, limiter *rate.Limiter) http.
 	}
 }
 
+func setupLogger(level, format string) {
+	var logOutput io.Writer = os.Stdout
+	log.SetOutput(logOutput)
+
+	// Set log format
+	if strings.ToLower(format) == "json" {
+		log.SetFlags(0) // Disable default timestamp
+		log.SetOutput(io.MultiWriter(logOutput, &jsonLogWriter{}))
+	} else {
+		log.SetFlags(log.LstdFlags) // Default text format with timestamp
+	}
+
+	// Set log level (basic implementation)
+	if strings.ToLower(level) == "error" {
+		log.SetOutput(io.Discard) // Discard all logs except errors (placeholder)
+	}
+}
+
+type jsonLogWriter struct{}
+
+func (j *jsonLogWriter) Write(p []byte) (n int, err error) {
+	logEntry := map[string]string{
+		"message":   strings.TrimSpace(string(p)),
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+	logJSON, _ := json.Marshal(logEntry)
+	os.Stdout.Write(logJSON)
+	os.Stdout.Write([]byte("\n"))
+	return len(p), nil
+}
+
 func main() {
-	configPath := flag.String("config", "gate.conf", "Path to main configuration file")
+	configPath := flag.String("config", "ghostgate.conf", "Path to main configuration file")
 	confDir := flag.String("conf-dir", "conf.d", "Path to additional configuration directory")
 	flag.Parse()
 
@@ -139,6 +190,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load configurations: %v", err)
 	}
+
+	// Setup logging
+	setupLogger(config.Logging.Level, config.Logging.Format)
 
 	// Function to reload configurations
 	reloadConfig := func() {
@@ -185,8 +239,14 @@ func main() {
 		log.Printf("Proxying path %s to backend: %s", route.Path, route.Backend)
 	}
 
-	// Replace static file handler with enhanced version
-	http.Handle("/", serveStaticFiles(config.Server.StaticDir))
+	// Serve welcome page if no routes or static directory is configured
+	if len(config.Proxy.Routes) == 0 && config.Server.StaticDir == "" {
+		http.Handle("/", serveWelcomePage())
+		log.Println("Serving default Welcome to GhostGate page")
+	} else {
+		// Replace static file handler with enhanced version
+		http.Handle("/", serveStaticFiles(config.Server.StaticDir))
+	}
 
 	// Set up autocert manager for Let's Encrypt
 	autoCertManager := &autocert.Manager{

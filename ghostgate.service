@@ -1,0 +1,13 @@
+[Unit]
+Description=GhostGate HTTP and Reverse Proxy Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env go run /home/chris/ghostgate/main.go -config /home/chris/ghostgate/gate.conf -conf-dir /home/chris/ghostgate/conf.d
+WorkingDirectory=/home/chris/ghostgate
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
