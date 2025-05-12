@@ -45,25 +45,40 @@ go build -o ghostgate
 ```
 
 ---
+### 🧩 What's Inside
 
-### 📅 Roadmap
+GhostGate now includes everything you need for modern HTTP service and reverse proxying:
 
-#### ✅ Core Functionality
+- 🔐 **Automatic TLS** via Let's Encrypt (autocert)
+- 🔁 **Graceful reloads** with SIGHUP signal support
+- 📂 **Static file server** with directory indexing, MIME type detection, and custom error pages
+- 🔀 **Reverse proxy** with path routing, header injection, and basic rate limiting
+- ⚙️ **Config merging** from gate.conf + conf.d/
+- 🧾 **Logging** in JSON or plain formats
+- 🚀 **Systemd unit file** for production deployment
+- 🌐 **Welcome page fallback** if no config is loaded
+---
+### 🔧 Under the Hood
 
-*
+GhostGate isn't just fast — it's production-ready:
 
-#### ✅ Static Server Features
+- Built-in TLS certificate handling via `autocert` (no external scripts)
+- Hot reloads with `SIGHUP` (no downtime on config change)
+- Modular configuration: `gate.conf` + `conf.d/*.yaml`
+- Customizable static file server with MIME-aware handling
+- Reverse proxy engine with header rewrites and rate limiting
+- Clean structured logging (JSON/plain) and gzip support
+- systemd integration with ready-to-deploy unit file
+---
+### 🌱 Next Steps (Community Wishlist)
 
-*
+The core is stable — here’s what you might contribute or extend:
 
-#### ✅ Reverse Proxy Features
-
-*
-
-#### ✅ DevOps/Deploy
-
-*
-
+- [ ] Dockerfile and containerized builds
+- [ ] CI pipeline with GitHub Actions
+- [ ] `.deb` / `.pkg.tar.zst` packaging for Linux distros
+- [ ] TLS passthrough (TCP proxying)
+- [ ] Dynamic config reloads from HTTP API
 ---
 
 ### 📝 License
