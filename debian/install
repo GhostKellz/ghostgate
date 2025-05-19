@@ -1,0 +1,5 @@
+ghostgate usr/local/bin/
+gate.conf etc/ghostgate/
+conf.d etc/ghostgate/
+static etc/ghostgate/
+ghostgate.service etc/systemd/system/

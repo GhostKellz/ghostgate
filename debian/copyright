@@ -1,0 +1,7 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: ghostgate
+Source: https://github.com/ghostkellz/ghostgate
+
+Files: *
+Copyright: 2025 Chris K
+License: AGPL-3.0

@@ -46,7 +46,62 @@ go build -o ghostgate
 
 ---
 
+## 🛠️ Installation
+
+### Debian/Ubuntu (or Arch) — Quick Install
+
+```bash
+# From the project directory:
+chmod +x install.sh
+./install.sh
+```
+This will:
+- Build the GhostGate binary
+- Install it to /usr/local/bin (Debian/Ubuntu) or /usr/bin (Arch)
+- Copy config files to /etc/ghostgate/
+- Install and enable the systemd service
+
+### Arch Linux — makepkg (AUR style)
+
+```bash
+# From the project directory:
+makepkg -si
+```
+This will use the provided PKGBUILD to build and install GhostGate as a system package.
+
+### Systemd Service
+
+After install, GhostGate runs as a systemd service:
+```bash
+sudo systemctl status ghostgate.service
+sudo systemctl restart ghostgate.service
+```
+
 ---
+
+## 📦 Debian/Ubuntu: .deb Package
+
+To build a .deb package:
+
+```bash
+sudo apt install build-essential debhelper golang
+cd /path/to/ghostgate
+# Build the binary first (required for packaging)
+go build -o ghostgate
+# Build the .deb package
+sudo dpkg-buildpackage -us -uc
+```
+
+This will create a .deb file in the parent directory. Install it with:
+
+```bash
+sudo dpkg -i ../ghostgate_*.deb
+```
+
+This will install the binary, config files, and systemd service, and start GhostGate automatically.
+
+---
+
 ### 🧩 What's Inside
 
 GhostGate now includes everything you need for modern HTTP service and reverse proxying:

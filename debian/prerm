@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+# Pre-removal script for ghostgate .deb
+systemctl stop ghostgate.service || true
+systemctl disable ghostgate.service || true
+exit 0

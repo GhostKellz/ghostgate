@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+# Post-install script for ghostgate .deb
+systemctl daemon-reload || true
+systemctl enable ghostgate.service || true
+systemctl restart ghostgate.service || true
+exit 0

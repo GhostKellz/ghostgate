@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 	"time"
 
 	"compress/gzip"
+
 	"github.com/patrickmn/go-cache"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/time/rate"
@@ -34,6 +37,8 @@ type Config struct {
 		Port      int    `yaml:"port"`
 		StaticDir string `yaml:"static_dir"`
 		Backend   string `yaml:"backend"`
+		TLSCert   string `yaml:"tls_cert"`
+		TLSKey    string `yaml:"tls_key"`
 	} `yaml:"server"`
 	Logging struct {
 		Level  string `yaml:"level"`
@@ -150,7 +155,7 @@ func serveWelcomePage() http.Handler {
 			</html>
 		`))
 	})
-} 
+}
 
 func rateLimitedProxy(proxy *httputil.ReverseProxy, limiter *rate.Limiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -309,6 +314,25 @@ func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 	return w.Writer.Write(b)
 }
 
+func checkCertExpiry(certPath string) {
+	certData, err := ioutil.ReadFile(certPath)
+	if err != nil {
+		log.Printf("[WARN] Could not read certificate for expiry check: %v", err)
+		return
+	}
+	certs, err := tls.X509KeyPair(certData, certData)
+	if err != nil {
+		log.Printf("[WARN] Could not parse certificate for expiry check: %v", err)
+		return
+	}
+	for _, cert := range certs.Certificate {
+		parsed, err := x509.ParseCertificate(cert)
+		if err == nil && time.Until(parsed.NotAfter) < 30*24*time.Hour {
+			log.Printf("[WARN] Certificate expires soon: %s", parsed.NotAfter)
+		}
+	}
+}
+
 func main() {
 	mode := flag.String("mode", "run", "Mode of operation: run, check, reload, cert, or version")
 	configPath := flag.String("config", "ghostgate.conf", "Path to main configuration file")
@@ -407,18 +431,39 @@ func main() {
 		http.Handle("/", gzipMiddleware(cacheMiddleware(serveStaticFilesWithCache(config.Server.StaticDir))))
 	}
 
-	// Set up autocert manager for Let's Encrypt
-	autoCertManager := &autocert.Manager{
-		Cache:      autocert.DirCache("certs"), // Directory to store certificates
-		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist("example.com", "www.example.com"), // Replace with your domain(s)
+	// Set up TLS config with OCSP stapling and custom cert/key support
+	var tlsConfig *tls.Config
+	if config.Server.TLSCert != "" && config.Server.TLSKey != "" {
+		checkCertExpiry(config.Server.TLSCert)
+		cert, err := tls.LoadX509KeyPair(config.Server.TLSCert, config.Server.TLSKey)
+		if err != nil {
+			log.Fatalf("Failed to load TLS cert/key: %v", err)
+		}
+		tlsConfig = &tls.Config{
+			Certificates:             []tls.Certificate{cert},
+			MinVersion:               tls.VersionTLS12,
+			NextProtos:               []string{"h2", "http/1.1"},
+			PreferServerCipherSuites: true,
+			GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				return &cert, nil
+			},
+			// OCSP stapling is handled automatically if the cert supports it
+		}
+	} else {
+		autoCertManager := &autocert.Manager{
+			Cache:      autocert.DirCache("certs"),
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist("example.com", "www.example.com"), // Replace with your domain(s)
+		}
+		tlsConfig = autoCertManager.TLSConfig()
+		// OCSP stapling is enabled by default in autocert
 	}
 
-	// Start HTTPS server with autocert
+	// Start HTTPS server with custom TLS config
 	httpsServer := &http.Server{
 		Addr:      ":443",
 		Handler:   nil,
-		TLSConfig: autoCertManager.TLSConfig(),
+		TLSConfig: tlsConfig,
 	}
 
 	// Start HTTP server to redirect to HTTPS

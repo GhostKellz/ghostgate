@@ -1,0 +1,13 @@
+Source: ghostgate
+Section: net
+Priority: optional
+Maintainer: Your Name <your@email.com>
+Build-Depends: debhelper (>= 11), golang-any
+Standards-Version: 4.1.4
+Homepage: https://github.com/ghostkellz/ghostgate
+
+Package: ghostgate
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Modern HTTP server and reverse proxy with ACME, static, and systemd support
+ GhostGate is a modern HTTP server and reverse proxy written in Go, supporting static file serving, reverse proxy, ACME/Let's Encrypt, and systemd integration.
