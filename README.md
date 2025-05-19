@@ -224,6 +224,37 @@ Future improvements:
 
 ---
 
+## 🏷️ Multi-domain/SAN Certificates & Virtual Hosts
+
+### Multi-domain Certificate Issuance
+
+You can issue a certificate for multiple domains at once:
+
+```bash
+ghostgate cert -domain example.com,www.example.com,api.example.com
+```
+
+This will request a single certificate valid for all listed domains.
+
+### Per-domain (Virtual Host) Configuration
+
+In your `gate.conf`:
+
+```yaml
+domains:
+  - domain: "example.com"
+    static_dir: "/srv/example.com/static"
+    proxy_routes:
+      - path: "/api"
+        backend: "http://localhost:3000"
+  - domain: "anotherdomain.com"
+    static_dir: "/srv/anotherdomain.com/static"
+```
+
+GhostGate will serve the correct static files and proxy rules based on the requested Host header.
+
+---
+
 ## ✨ Performance Enhancements (Planned)
 
 * **Reverse Proxy Caching:** Optional response caching via Ristretto or groupcache

@@ -32,24 +32,26 @@ import (
 
 const version = "1.0.0" // Define the version of GhostGate
 
+type DomainConfig struct {
+	Domain      string `yaml:"domain"`
+	StaticDir   string `yaml:"static_dir"`
+	ProxyRoutes []struct {
+		Path    string `yaml:"path"`
+		Backend string `yaml:"backend"`
+	} `yaml:"proxy_routes"`
+}
+
 type Config struct {
 	Server struct {
-		Port      int    `yaml:"port"`
-		StaticDir string `yaml:"static_dir"`
-		Backend   string `yaml:"backend"`
-		TLSCert   string `yaml:"tls_cert"`
-		TLSKey    string `yaml:"tls_key"`
+		Port    int    `yaml:"port"`
+		TLSCert string `yaml:"tls_cert"`
+		TLSKey  string `yaml:"tls_key"`
 	} `yaml:"server"`
 	Logging struct {
 		Level  string `yaml:"level"`
 		Format string `yaml:"format"`
 	} `yaml:"logging"`
-	Proxy struct {
-		Routes []struct {
-			Path    string `yaml:"path"`
-			Backend string `yaml:"backend"`
-		} `yaml:"routes"`
-	} `yaml:"proxy"`
+	Domains []DomainConfig `yaml:"domains"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -85,7 +87,7 @@ func loadConfigs(mainConfigPath string, confDir string) (*Config, error) {
 			}
 
 			// Merge additionalConfig into mainConfig
-			mainConfig.Proxy.Routes = append(mainConfig.Proxy.Routes, additionalConfig.Proxy.Routes...)
+			mainConfig.Domains = append(mainConfig.Domains, additionalConfig.Domains...)
 		}
 	}
 
@@ -211,8 +213,8 @@ func validateConfig(configPath string) error {
 	if config.Server.Port == 0 {
 		return fmt.Errorf("server port is not defined")
 	}
-	if config.Server.StaticDir == "" && len(config.Proxy.Routes) == 0 {
-		return fmt.Errorf("either static_dir or proxy routes must be defined")
+	if len(config.Domains) == 0 {
+		return fmt.Errorf("at least one domain must be defined")
 	}
 
 	log.Println("Configuration is valid.")
@@ -228,39 +230,36 @@ func reloadGhostGate() {
 	log.Println("Reload signal sent successfully.")
 }
 
-func issueCertificate(domain string) {
-	log.Printf("Issuing certificate for domain: %s", domain)
-
-	// Define the command to issue the certificate using acme.sh
-	cmd := exec.Command("acme.sh", "--issue", "--dns", "dns_pdns", "-d", domain, "-d", "*."+domain, "--dnssleep", "20", "--log", "--debug")
+func issueCertificate(domains []string) {
+	log.Printf("Issuing certificate for domains: %v", domains)
+	acmeArgs := []string{"--issue", "--dns", "dns_pdns"}
+	for _, d := range domains {
+		acmeArgs = append(acmeArgs, "-d", d)
+	}
+	acmeArgs = append(acmeArgs, "--dnssleep", "20", "--log", "--debug")
+	cmd := exec.Command("acme.sh", acmeArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
-	// Run the command
 	if err := cmd.Run(); err != nil {
-		log.Fatalf("Failed to issue certificate for domain %s: %v", domain, err)
+		log.Fatalf("Failed to issue certificate for domains %v: %v", domains, err)
 	}
-
-	// Define the directory to store the certificates
-	domainDir := filepath.Join("/etc/ghostgate/certs", domain)
+	// Use the first domain for cert storage
+	domainDir := filepath.Join("/etc/ghostgate/certs", domains[0])
 	if err := os.MkdirAll(domainDir, 0755); err != nil {
 		log.Fatalf("Failed to create directory for certificates: %v", err)
 	}
-
-	// Install the certificates
-	installCmd := exec.Command("acme.sh", "--install-cert", "-d", domain,
+	installArgs := []string{"--install-cert", "-d", domains[0],
 		"--cert-file", filepath.Join(domainDir, "cert.pem"),
 		"--key-file", filepath.Join(domainDir, "privkey.pem"),
 		"--fullchain-file", filepath.Join(domainDir, "fullchain.pem"),
-		"--reloadcmd", "ghostgate reload")
+		"--reloadcmd", "ghostgate reload"}
+	installCmd := exec.Command("acme.sh", installArgs...)
 	installCmd.Stdout = os.Stdout
 	installCmd.Stderr = os.Stderr
-
 	if err := installCmd.Run(); err != nil {
-		log.Fatalf("Failed to install certificate for domain %s: %v", domain, err)
+		log.Fatalf("Failed to install certificate for domain %s: %v", domains[0], err)
 	}
-
-	log.Printf("Certificate successfully issued and installed for domain: %s", domain)
+	log.Printf("Certificate successfully issued and installed for domains: %v", domains)
 }
 
 // Add a global cache instance
@@ -333,11 +332,24 @@ func checkCertExpiry(certPath string) {
 	}
 }
 
+// hostHandler only serves requests for the given domain
+func hostHandler(domain string, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == domain || strings.HasPrefix(r.Host, domain+":") {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		// Not this domain, ignore
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("404 - Not Found"))
+	})
+}
+
 func main() {
 	mode := flag.String("mode", "run", "Mode of operation: run, check, reload, cert, or version")
 	configPath := flag.String("config", "ghostgate.conf", "Path to main configuration file")
 	confDir := flag.String("conf-dir", "conf.d", "Path to additional configuration directory")
-	domain := flag.String("domain", "", "Domain for certificate issuance (used with cert mode)")
+	domainsFlag := flag.String("domain", "", "Comma-separated domains for certificate issuance (used with cert mode)")
 	flag.Parse()
 
 	if *mode == "version" {
@@ -351,10 +363,11 @@ func main() {
 	}
 
 	if *mode == "cert" {
-		if *domain == "" {
-			log.Fatalf("Domain is required for certificate issuance. Use -domain flag.")
+		if *domainsFlag == "" {
+			log.Fatalf("Domain(s) required for certificate issuance. Use -domain flag.")
 		}
-		issueCertificate(*domain)
+		domains := strings.Split(*domainsFlag, ",")
+		issueCertificate(domains)
 		os.Exit(0)
 	}
 
@@ -401,34 +414,31 @@ func main() {
 	if port == 0 {
 		port = 80 // Default to port 80 for HTTP
 	}
-	staticDir := config.Server.StaticDir
 
-	// Validate directory
-	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-		log.Fatalf("Directory does not exist: %s", staticDir)
-	}
-
-	// Set up handlers based on configuration
-	for _, route := range config.Proxy.Routes {
-		backendURL, err := url.Parse(route.Backend)
-		if err != nil {
-			log.Printf("Invalid backend URL for path %s: %v", route.Path, err)
-			continue
+	// Per-domain (virtual host) handler setup
+	mux := http.NewServeMux()
+	for _, d := range config.Domains {
+		if d.StaticDir != "" {
+			mux.Handle("/", hostHandler(d.Domain, gzipMiddleware(cacheMiddleware(serveStaticFilesWithCache(d.StaticDir)))))
 		}
-		proxy := httputil.NewSingleHostReverseProxy(backendURL)
-		limiter := rate.NewLimiter(1, 5) // 1 request per second with a burst of 5
-		http.HandleFunc(route.Path, rateLimitedProxy(proxy, limiter))
-		log.Printf("Proxying path %s to backend: %s", route.Path, route.Backend)
+		for _, route := range d.ProxyRoutes {
+			backendURL, err := url.Parse(route.Backend)
+			if err != nil {
+				log.Printf("Invalid backend URL for domain %s path %s: %v", d.Domain, route.Path, err)
+				continue
+			}
+			proxy := httputil.NewSingleHostReverseProxy(backendURL)
+			limiter := rate.NewLimiter(1, 5)
+			mux.Handle(route.Path, hostHandler(d.Domain, rateLimitedProxy(proxy, limiter)))
+		}
 	}
 
-	// Serve welcome page if no routes or static directory is configured
-	if len(config.Proxy.Routes) == 0 && config.Server.StaticDir == "" {
-		http.Handle("/", serveWelcomePage())
+	// Serve welcome page if no domains are configured
+	if len(config.Domains) == 0 {
+		mux.Handle("/", serveWelcomePage())
 		log.Println("Serving default Welcome to GhostGate page")
 	} else {
-		// Replace static file handler with enhanced version
-		http.Handle("/health", serveHealthCheck())
-		http.Handle("/", gzipMiddleware(cacheMiddleware(serveStaticFilesWithCache(config.Server.StaticDir))))
+		mux.Handle("/health", serveHealthCheck())
 	}
 
 	// Set up TLS config with OCSP stapling and custom cert/key support
@@ -462,7 +472,7 @@ func main() {
 	// Start HTTPS server with custom TLS config
 	httpsServer := &http.Server{
 		Addr:      ":443",
-		Handler:   nil,
+		Handler:   mux,
 		TLSConfig: tlsConfig,
 	}
 
