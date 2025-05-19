@@ -32,6 +32,11 @@ Designed for flexibility and performance, it powers:
 * Gzip compression and static file caching
 * Logging with customizable levels and formats (JSON or plain)
 * Welcome page when no config is present
+* Dynamic reloads via file watching and admin API
+* Advanced routing with regex and middleware
+* Per-domain ACME/Autocert support
+* Prometheus metrics for monitoring
+* Security features like HSTS, CSP, and IP filtering
 
 ---
 
@@ -114,7 +119,14 @@ GhostGate now includes everything you need for modern HTTP service and reverse p
 - 🧾 **Logging** in JSON or plain formats
 - 🚀 **Systemd unit file** for production deployment
 - 🌐 **Welcome page fallback** if no config is loaded
+- 🚦 **Dynamic reloads** via file watching and admin API
+- 🛣️ **Advanced routing** with regex and middleware
+- 🔒 **Per-domain ACME/Autocert** support
+- 📊 **Prometheus metrics** for monitoring
+- 🛡️ **Security features** like HSTS, CSP, and IP filtering
+
 ---
+
 ### 🔧 Under the Hood
 
 GhostGate isn't just fast — it's production-ready:
@@ -126,7 +138,91 @@ GhostGate isn't just fast — it's production-ready:
 - Reverse proxy engine with header rewrites and rate limiting
 - Clean structured logging (JSON/plain) and gzip support
 - systemd integration with ready-to-deploy unit file
+- Dynamic reloads via file watching and admin API
+- Advanced routing with regex and middleware
+- Per-domain ACME/Autocert support
+- Prometheus metrics for monitoring
+- Security features like HSTS, CSP, and IP filtering
+
 ---
+
+## 🚦 Dynamic Reloads & Admin API
+
+- GhostGate supports live config/cert reloads via file watching and an HTTP admin endpoint.
+- To enable, set in your `gate.conf`:
+
+```yaml
+reload_on_change: true
+server:
+  admin_api: ":8081"  # Admin API endpoint (optional)
+```
+
+Trigger a reload via HTTP:
+```bash
+curl -X POST http://localhost:8081/admin/reload
+```
+
+---
+
+## 🔒 Per-domain ACME/Autocert
+
+Each domain can use Let's Encrypt autocert and specify an ACME email:
+
+```yaml
+domains:
+  - domain: "example.com"
+    autocert: true
+    acme_email: "admin@example.com"
+```
+
+---
+
+## 🛣️ Advanced Routing & Middleware
+
+- Supports wildcard/regex host and path matching, per-route rate limiting, and custom headers.
+
+```yaml
+domains:
+  - domain: "^.*\\.example\\.com$"  # Regex match
+    domain_regex: true
+    proxy_routes:
+      - path: "^/api/v[0-9]+/.*$"
+        regex: true
+        backend: "http://localhost:3000"
+        rate_limit: 10  # requests/sec
+        headers:
+          X-Forwarded-Host: "api.example.com"
+```
+
+---
+
+## 📊 Logging & Monitoring
+
+- Structured access logs include per-domain context.
+- Prometheus `/metrics` endpoint is available for monitoring:
+
+```
+http://yourdomain.com/metrics
+```
+
+---
+
+## 🛡️ Security & Hardening
+
+- Per-domain HTTP→HTTPS redirection, HSTS, CSP, and IP allow/deny lists.
+
+```yaml
+domains:
+  - domain: "secure.example.com"
+    redirect_to_https: true
+    hsts: true
+    csp: "default-src 'self';"
+    allow_ips: ["192.168.1.1"]
+    deny_ips: ["10.0.0.1"]
+```
+
+---
+
 ## 🧹 Commands
 
 GhostGate includes the following CLI commands:
@@ -268,6 +364,7 @@ GhostGate will serve the correct static files and proxy rules based on the reque
 Let us know which features you'd like prioritized!
 
 ---
+
 ### 🌱 Next Steps (Community Wishlist)
 
 The core is stable — here’s what you might contribute or extend:
@@ -277,10 +374,11 @@ The core is stable — here’s what you might contribute or extend:
 - [ ] `.deb` / `.pkg.tar.zst` packaging for Linux distros
 - [ ] TLS passthrough (TCP proxying)
 - [ ] Dynamic config reloads from HTTP API
+
 ---
 
 ### 📝 License
 
 **AGPL v3** — See [LICENSE](LICENSE) for details.
 
-GhostGate is part of the \*\*CK Technology \*\*  infrastructure tooling ecosystem.
+GhostGate is part of the **CK Technology** infrastructure tooling ecosystem.

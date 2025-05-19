@@ -18,13 +18,16 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
 	"compress/gzip"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/patrickmn/go-cache"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v2"
@@ -32,26 +35,41 @@ import (
 
 const version = "1.0.0" // Define the version of GhostGate
 
+type ProxyRoute struct {
+	Path      string            `yaml:"path"`
+	Backend   string            `yaml:"backend"`
+	Regex     bool              `yaml:"regex"`
+	RateLimit int               `yaml:"rate_limit"`
+	Headers   map[string]string `yaml:"headers"`
+}
+
 type DomainConfig struct {
-	Domain      string `yaml:"domain"`
-	StaticDir   string `yaml:"static_dir"`
-	ProxyRoutes []struct {
-		Path    string `yaml:"path"`
-		Backend string `yaml:"backend"`
-	} `yaml:"proxy_routes"`
+	Domain          string       `yaml:"domain"`
+	DomainRegex     bool         `yaml:"domain_regex"`
+	StaticDir       string       `yaml:"static_dir"`
+	ProxyRoutes     []ProxyRoute `yaml:"proxy_routes"`
+	Autocert        bool         `yaml:"autocert"`
+	ACMEEmail       string       `yaml:"acme_email"`
+	RedirectToHTTPS bool         `yaml:"redirect_to_https"`
+	HSTS            bool         `yaml:"hsts"`
+	CSP             string       `yaml:"csp"`
+	AllowIPs        []string     `yaml:"allow_ips"`
+	DenyIPs         []string     `yaml:"deny_ips"`
 }
 
 type Config struct {
 	Server struct {
-		Port    int    `yaml:"port"`
-		TLSCert string `yaml:"tls_cert"`
-		TLSKey  string `yaml:"tls_key"`
+		Port     int    `yaml:"port"`
+		TLSCert  string `yaml:"tls_cert"`
+		TLSKey   string `yaml:"tls_key"`
+		AdminAPI string `yaml:"admin_api"`
 	} `yaml:"server"`
 	Logging struct {
 		Level  string `yaml:"level"`
 		Format string `yaml:"format"`
 	} `yaml:"logging"`
-	Domains []DomainConfig `yaml:"domains"`
+	Domains        []DomainConfig `yaml:"domains"`
+	ReloadOnChange bool           `yaml:"reload_on_change"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -333,15 +351,129 @@ func checkCertExpiry(certPath string) {
 }
 
 // hostHandler only serves requests for the given domain
-func hostHandler(domain string, handler http.Handler) http.Handler {
+func hostHandler(domain string, domainRegex bool, handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Host == domain || strings.HasPrefix(r.Host, domain+":") {
-			handler.ServeHTTP(w, r)
-			return
+		if domainRegex {
+			matched, _ := regexp.MatchString(domain, r.Host)
+			if matched {
+				handler.ServeHTTP(w, r)
+				return
+			}
+		} else {
+			if r.Host == domain || strings.HasPrefix(r.Host, domain+":") {
+				handler.ServeHTTP(w, r)
+				return
+			}
 		}
-		// Not this domain, ignore
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte("404 - Not Found"))
+	})
+}
+
+func routeHandler(route ProxyRoute, proxy *httputil.ReverseProxy) http.HandlerFunc {
+	limiter := rate.NewLimiter(rate.Limit(route.RateLimit), 5)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if route.RateLimit > 0 && !limiter.Allow() {
+			http.Error(w, "429 - Too Many Requests", http.StatusTooManyRequests)
+			return
+		}
+		for k, v := range route.Headers {
+			r.Header.Set(k, v)
+		}
+		proxy.ServeHTTP(w, r)
+	}
+}
+
+func watchFiles(paths []string, reloadFunc func()) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("[WARN] Could not start file watcher: %v", err)
+		return
+	}
+	defer watcher.Close()
+	for _, p := range paths {
+		watcher.Add(p)
+	}
+	for {
+		select {
+		case event := <-watcher.Events:
+			if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
+				log.Println("[INFO] Config or cert file changed, reloading...")
+				reloadFunc()
+			}
+		case err := <-watcher.Errors:
+			log.Printf("[WARN] File watcher error: %v", err)
+		}
+	}
+}
+
+func serveAdminAPI(reloadFunc func()) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/admin/reload" {
+			reloadFunc()
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Reloaded"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+}
+
+func getAutocertManager(domains []DomainConfig) *autocert.Manager {
+	hosts := []string{}
+	var email string
+	for _, d := range domains {
+		if d.Autocert {
+			hosts = append(hosts, d.Domain)
+			if d.ACMEEmail != "" {
+				email = d.ACMEEmail
+			}
+		}
+	}
+	return &autocert.Manager{
+		Cache:      autocert.DirCache("certs"),
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(hosts...),
+		Email:      email,
+	}
+}
+
+func loggingMiddleware(domain string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[ACCESS] domain=%s method=%s path=%s remote=%s", domain, r.Method, r.URL.Path, r.RemoteAddr)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func securityMiddleware(domain DomainConfig, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remoteIP := strings.Split(r.RemoteAddr, ":")[0]
+		if len(domain.AllowIPs) > 0 {
+			allowed := false
+			for _, ip := range domain.AllowIPs {
+				if ip == remoteIP {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				http.Error(w, "403 - Forbidden", http.StatusForbidden)
+				return
+			}
+		}
+		for _, ip := range domain.DenyIPs {
+			if ip == remoteIP {
+				http.Error(w, "403 - Forbidden", http.StatusForbidden)
+				return
+			}
+		}
+		if domain.HSTS {
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		}
+		if domain.CSP != "" {
+			w.Header().Set("Content-Security-Policy", domain.CSP)
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -409,6 +541,18 @@ func main() {
 		}
 	}()
 
+	if config.ReloadOnChange {
+		go watchFiles([]string{*configPath}, reloadConfig)
+	}
+	if config.Server.AdminAPI != "" {
+		go func() {
+			log.Printf("Starting admin API on %s", config.Server.AdminAPI)
+			adminMux := http.NewServeMux()
+			adminMux.Handle("/admin/reload", serveAdminAPI(reloadConfig))
+			http.ListenAndServe(config.Server.AdminAPI, adminMux)
+		}()
+	}
+
 	// Use configuration values
 	port := config.Server.Port
 	if port == 0 {
@@ -417,9 +561,13 @@ func main() {
 
 	// Per-domain (virtual host) handler setup
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
 	for _, d := range config.Domains {
 		if d.StaticDir != "" {
-			mux.Handle("/", hostHandler(d.Domain, gzipMiddleware(cacheMiddleware(serveStaticFilesWithCache(d.StaticDir)))))
+			h := gzipMiddleware(cacheMiddleware(serveStaticFilesWithCache(d.StaticDir)))
+			h = loggingMiddleware(d.Domain, h)
+			h = securityMiddleware(d, h)
+			mux.Handle("/", hostHandler(d.Domain, d.DomainRegex, h))
 		}
 		for _, route := range d.ProxyRoutes {
 			backendURL, err := url.Parse(route.Backend)
@@ -428,8 +576,23 @@ func main() {
 				continue
 			}
 			proxy := httputil.NewSingleHostReverseProxy(backendURL)
-			limiter := rate.NewLimiter(1, 5)
-			mux.Handle(route.Path, hostHandler(d.Domain, rateLimitedProxy(proxy, limiter)))
+			var handler http.Handler
+			if route.Regex {
+				handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					matched, _ := regexp.MatchString(route.Path, r.URL.Path)
+					if matched {
+						routeHandler(route, proxy).ServeHTTP(w, r)
+						return
+					}
+					w.WriteHeader(http.StatusNotFound)
+				})
+			} else {
+				handler = routeHandler(route, proxy)
+			}
+			h := handler
+			h = loggingMiddleware(d.Domain, h)
+			h = securityMiddleware(d, h)
+			mux.Handle(route.Path, hostHandler(d.Domain, d.DomainRegex, h))
 		}
 	}
 
@@ -440,6 +603,31 @@ func main() {
 	} else {
 		mux.Handle("/health", serveHealthCheck())
 	}
+
+	// HTTP→HTTPS redirection per domain
+	httpMux := http.NewServeMux()
+	for _, d := range config.Domains {
+		if d.RedirectToHTTPS {
+			httpMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "https://"+r.Host+r.URL.String(), http.StatusMovedPermanently)
+			})
+		}
+	}
+	if len(config.Domains) == 0 {
+		httpMux.Handle("/", serveWelcomePage())
+	}
+
+	// Start HTTP server to redirect to HTTPS or serve welcome
+	httpServer := &http.Server{
+		Addr:    ":80",
+		Handler: httpMux,
+	}
+	go func() {
+		log.Printf("Starting HTTP server on :80")
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server failed: %v", err)
+		}
+	}()
 
 	// Set up TLS config with OCSP stapling and custom cert/key support
 	var tlsConfig *tls.Config
@@ -460,13 +648,8 @@ func main() {
 			// OCSP stapling is handled automatically if the cert supports it
 		}
 	} else {
-		autoCertManager := &autocert.Manager{
-			Cache:      autocert.DirCache("certs"),
-			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist("example.com", "www.example.com"), // Replace with your domain(s)
-		}
+		autoCertManager := getAutocertManager(config.Domains)
 		tlsConfig = autoCertManager.TLSConfig()
-		// OCSP stapling is enabled by default in autocert
 	}
 
 	// Start HTTPS server with custom TLS config
@@ -475,21 +658,6 @@ func main() {
 		Handler:   mux,
 		TLSConfig: tlsConfig,
 	}
-
-	// Start HTTP server to redirect to HTTPS
-	httpServer := &http.Server{
-		Addr: ":80",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "https://"+r.Host+r.URL.String(), http.StatusMovedPermanently)
-		}),
-	}
-
-	go func() {
-		log.Printf("Starting HTTP server on :80")
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP server failed: %v", err)
-		}
-	}()
 
 	log.Printf("Starting HTTPS server on :443")
 	if err := httpsServer.ListenAndServeTLS("", ""); err != nil {
