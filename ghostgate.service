@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env go run /home/chris/ghostgate/main.go -config /home/chris/ghostgate/gate.conf -conf-dir /home/chris/ghostgate/conf.d
-WorkingDirectory=/home/chris/ghostgate
+ExecStart=/usr/bin/ghostgate -config /etc/ghostgate/gate.conf -conf-dir /etc/ghostgate/conf.d
+WorkingDirectory=/etc/ghostgate
 Restart=on-failure
 RestartSec=5s
 

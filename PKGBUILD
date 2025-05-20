@@ -1,4 +1,4 @@
-# Maintainer: Your Name <your@email.com>
+# Maintainer: GhostKellz <ckelley@ghostkellz.sh>
 pkgname=ghostgate
 gitname=ghostgate
 giturl="https://github.com/ghostkellz/ghostgate.git"
@@ -10,7 +10,7 @@ url="https://github.com/ghostkellz/ghostgate"
 license=('AGPL3')
 depends=('go')
 makedepends=('git')
-source=("$giturl")
+source=("$gitname::git+$giturl")
 md5sums=('SKIP')
 
 build() {
@@ -23,7 +23,13 @@ package() {
   install -Dm755 ghostgate "$pkgdir/usr/bin/ghostgate"
   install -Dm644 gate.conf "$pkgdir/etc/ghostgate/gate.conf"
   install -Dm644 ghostgate.service "$pkgdir/etc/systemd/system/ghostgate.service"
-  cp -r conf.d "$pkgdir/etc/ghostgate/"
+  install -d "$pkgdir/etc/ghostgate"
+
+  # Optional config dirs
+  if [ -d conf.d ]; then
+    cp -r conf.d "$pkgdir/etc/ghostgate/"
+  fi
+
   if [ -d static ]; then
     cp -r static "$pkgdir/etc/ghostgate/"
   fi
